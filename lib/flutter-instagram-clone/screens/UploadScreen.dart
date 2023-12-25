@@ -1,0 +1,309 @@
+import 'dart:io';
+import 'dart:ui';
+
+import 'package:cached_network_image/cached_network_image.dart';
+import 'package:chatgram_app/flutter-instagram-clone/data/user.dart';
+import 'package:chatgram_app/flutter-instagram-clone/screens/FrontScreen.dart';
+import 'package:chatgram_app/flutter-instagram-clone/widgets/widgets.dart' as widgetclass;
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_storage/firebase_storage.dart';
+import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:image/image.dart' as Im;
+import 'package:uuid/uuid.dart';
+
+DateTime timestamp = DateTime.now();
+
+class UploadScreen extends StatefulWidget {
+  final User currentuser;
+  UploadScreen({this.currentuser});
+  @override
+  _UploadScreenState createState() => _UploadScreenState();
+}
+
+class _UploadScreenState extends State<UploadScreen> {
+  TextEditingController locationcontroller = TextEditingController();
+  TextEditingController captioncontroller = TextEditingController();
+  File file;
+  bool isuploading = false;
+  String postId = Uuid().v4();
+
+  clearImage() {
+    setState(() {
+      this.file = null;
+    });
+  }
+
+  Future<String> uploadImage(imagefile) async {
+    StorageUploadTask uploadtask =
+        storageRef.child("img_$postId.jpg").putFile(imagefile);
+    StorageTaskSnapshot storagesnap = await uploadtask.onComplete;
+    String downloadUrl = await storagesnap.ref.getDownloadURL();
+    return downloadUrl;
+  }
+
+  createPostInFirestore(
+      {String mediaUrl, String location, String description}) {
+    postsref
+        .document(widget.currentuser.id)
+        .collection("userPosts")
+        .document(postId)
+        .setData({
+      "postId": postId,
+      "ownerId": widget.currentuser.id,
+      "username": widget.currentuser.username,
+      "mediaUrl": mediaUrl,
+      "description": description,
+      "location": location,
+      "timestamp": timestamp,
+      "likes": {}
+    });
+  }
+
+  handleSubmit() async {
+    setState(() {
+      isuploading = true;
+    });
+    await compressImage();
+    String mediaUrl = await uploadImage(file);
+    createPostInFirestore(
+        mediaUrl: mediaUrl,
+        location: locationcontroller.text,
+        description: captioncontroller.text);
+       await addpoststofollowers(mediaUrl: mediaUrl,
+        location: locationcontroller.text,
+        description: captioncontroller.text);
+    captioncontroller.clear();
+    locationcontroller.clear();
+    setState(() {
+      file = null;
+      isuploading = false;
+      postId = Uuid().v4();
+    });
+  }
+
+  addpoststofollowers({String mediaUrl, String location, String description}) async{
+   QuerySnapshot querysnap = await followersRef.document(widgetclass.currentuser.id).collection('userFollowers').getDocuments();
+   querysnap.documents.forEach((alldocs) {
+     if(alldocs.exists){
+       timelineRef.document(alldocs.documentID).collection('userFollowing').document(widgetclass.currentuser.id).collection('userPosts').document(postId).setData({
+         "postId": postId,
+      "ownerId": widget.currentuser.id,
+      "username": widget.currentuser.username,
+      "mediaUrl": mediaUrl,
+      "description": description,
+      "location": location,
+      "timestamp": timestamp,
+      "likes": {}
+       });
+     }
+    });
+  }
+
+  compressImage() async {
+    final tempDir = await getTemporaryDirectory();
+    final path = tempDir.path;
+    Im.Image imageFile = await Im.decodeImage(file.readAsBytesSync());
+    final compressedImageFile = File('$path/img_$postId.jpg')
+      ..writeAsBytesSync(Im.encodeJpg(imageFile, quality: 85));
+    setState(() {
+      file = compressedImageFile;
+    });
+  }
+
+  Scaffold buildUploadForm() {
+    return Scaffold(
+      appBar: AppBar(
+        backgroundColor: widgetclass.backgroundcolor,
+        leading: IconButton(
+          icon: Icon(
+            Icons.arrow_back,
+            color: Colors.black,
+          ),
+          onPressed: clearImage,
+        ),
+        title: Text(
+          'Caption Post',
+          style: TextStyle(color: Colors.black),
+        ),
+        actions: [
+          FlatButton(
+              onPressed: isuploading ? null : () => handleSubmit(),
+              child: Text('Post',
+                  style: TextStyle(
+                      color: Colors.blueAccent,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 20.0)))
+        ],
+      ),
+      body: ListView(
+        children: [
+          isuploading
+              ? Container(
+                  padding: EdgeInsets.only(bottom: 10.0),
+                  child: LinearProgressIndicator(
+                    valueColor: AlwaysStoppedAnimation(Colors.purple),
+                  ))
+              : Text(""),
+          Container(
+            height: 220.0,
+            width: MediaQuery.of(context).size.width * 0.8,
+            child: Center(
+              child: AspectRatio(
+                aspectRatio: 16 / 9,
+                child: Container(
+                  decoration: BoxDecoration(
+                      image: DecorationImage(
+                          fit: BoxFit.cover, image: FileImage(file))),
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: EdgeInsets.only(top: 10.0),
+          ),
+          ListTile(
+            leading: CircleAvatar(
+              backgroundImage:
+                  CachedNetworkImageProvider(widget.currentuser.photourl),
+            ),
+            title: Container(
+              width: 250.0,
+              child: TextField(
+                controller: captioncontroller,
+                decoration: InputDecoration(
+                    hintText: "Write a caption....", border: InputBorder.none),
+              ),
+            ),
+          ),
+          Divider(),
+          ListTile(
+            leading: Icon(
+              Icons.pin_drop,
+              color: Colors.orange,
+              size: 35.0,
+            ),
+            title: Container(
+              width: 250.0,
+              child: TextField(
+                controller: locationcontroller,
+                decoration: InputDecoration(
+                    hintText: "Your Location ....", border: InputBorder.none),
+              ),
+            ),
+          ),
+          Container(
+            width: 200.0,
+            height: 100.0,
+            alignment: Alignment.center,
+            child: RaisedButton.icon(
+              onPressed: getUserLocation,
+              icon: Icon(
+                Icons.my_location,
+                color: Colors.white,
+              ),
+              label: Text('Use Current Location',
+                  style: TextStyle(color: Colors.white)),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(30.0)),
+              color: widgetclass.primarycolor,
+            ),
+          )
+        ],
+      ),
+    );
+  }
+
+  getUserLocation() async {
+    Position position = await Geolocator()
+        .getCurrentPosition(desiredAccuracy: LocationAccuracy.high);
+    List<Placemark> placemarks = await Geolocator()
+        .placemarkFromCoordinates(position.latitude, position.longitude);
+    Placemark placemark = placemarks[0];
+    String completeAddress =
+        '${placemark.subThoroughfare}, ${placemark.thoroughfare}, ${placemark.subLocality}, ${placemark.locality}, ${placemark.subAdministrativeArea}${placemark.administrativeArea}, ${placemark.postalCode}, ${placemark.country}';
+    print(completeAddress);
+    String formattedAddress = "${placemark.locality}, ${placemark.country}";
+    locationcontroller.text = formattedAddress;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return file == null ? builsplashScreen() : buildUploadForm();
+  }
+
+  Widget builsplashScreen() {
+    return Container(
+        height: MediaQuery.of(context).size.height * 0.8,
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+            begin: Alignment.bottomLeft,
+            end: Alignment.topRight,
+            colors: [Colors.orange, Colors.purple, Colors.pink]),
+      ),
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          Align(
+            alignment: Alignment.center,
+                        child: RaisedButton(
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                          ),
+                          onPressed: () => selectImage(context),
+                          child: Text('Upload Image',
+                              style: TextStyle(color: Colors.white, fontSize: 22.0)),
+                          color: Colors.deepOrange,
+                        ),
+          )
+        ],
+      ),
+    );
+  }
+
+  selectImage(BuildContext context) {
+    return showDialog(
+        context: context,
+        builder: (context) {
+          return SimpleDialog(
+            title: Text('Create Post'),
+            children: <Widget>[
+              SimpleDialogOption(
+                child: Text('Photo with Camera'),
+                onPressed: handleTakePhoto,
+              ),
+              SimpleDialogOption(
+                child: Text('Image from Gallery'),
+                onPressed: handlechoosePhotoGallery,
+              ),
+              SimpleDialogOption(
+                child: Text('Cancel'),
+                onPressed: () => Navigator.pop(context),
+              )
+            ],
+          );
+        });
+  }
+
+  void handleTakePhoto() async {
+    Navigator.pop(context);
+    File file = await ImagePicker.pickImage(
+        source: ImageSource.camera, maxHeight: 675, maxWidth: 960);
+    setState(() {
+      this.file = file;
+    });
+  }
+
+  void handlechoosePhotoGallery() async {
+    Navigator.pop(context);
+
+    File file = await ImagePicker.pickImage(
+      source: ImageSource.gallery,
+    );
+    setState(() {
+      this.file = file;
+    });
+  }
+}
